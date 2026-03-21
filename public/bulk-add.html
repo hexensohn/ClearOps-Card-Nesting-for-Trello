@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Add from List</title>
+    <link rel="stylesheet" href="https://p.trellocdn.com/power-up.min.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260322" />
+    <script src="https://p.trellocdn.com/power-up.min.js"></script>
+    <script src="./config.js?v=20260322"></script>
+    <script src="./app.js?v=20260322" defer></script>
+  </head>
+  <body class="popup" data-page="bulk-add">
+    <div class="page">
+      <div class="card stack compact-popup">
+        <h1>Add from List</h1>
+
+        <div class="notice" id="auth-status">Authorize Trello to continue.</div>
+        <div class="row wrap" id="auth-row">
+          <button class="secondary" id="authorize-btn" type="button">Authorize Trello API</button>
+        </div>
+
+        <form id="bulk-add-form" class="stack">
+          <div class="field">
+            <label for="bulk-list-id">List</label>
+            <select id="bulk-list-id" name="bulk-list-id"></select>
+          </div>
+
+          <div class="row wrap">
+            <button class="ghost" id="refresh-cards-btn" type="button">Refresh</button>
+          </div>
+
+          <div id="bulk-card-list" class="selection-list"></div>
+
+          <div class="row wrap">
+            <button class="primary" type="submit">Add Selected</button>
+            <button class="ghost" type="button" onclick="window.TrelloPowerUp.iframe().closePopup()">Cancel</button>
+          </div>
+        </form>
+
+        <div id="message"></div>
+      </div>
+    </div>
+  </body>
+</html>
