@@ -65,7 +65,9 @@ For VPS deploys, the container now generates `public/config.js` from environment
 2. Copy `.env.example` to `.env`.
 3. Set these values in `.env`:
 
-- `HOST_PORT`
+- `SITE_HOST`
+- `HTTP_PORT`
+- `HTTPS_PORT`
 - `POWERUP_APP_NAME`
 - `POWERUP_API_KEY`
 - `POWERUP_APP_URL`
@@ -76,24 +78,32 @@ For VPS deploys, the container now generates `public/config.js` from environment
 docker compose up -d --build
 ```
 
-The app will be available on `http://your-server:HOST_PORT` before you put HTTPS in front of it.
+This stack now includes Caddy, which will request and renew HTTPS certificates automatically for your domain.
 
 Example `.env`:
 
 ```env
-HOST_PORT=8081
+SITE_HOST=trello.clearops.com.au
+HTTP_PORT=80
+HTTPS_PORT=443
 POWERUP_APP_NAME=ClearOps Card Nesting
 POWERUP_API_KEY=YOUR_TRELLO_API_KEY
-POWERUP_APP_URL=https://trello-nesting.yourdomain.com
+POWERUP_APP_URL=https://trello.clearops.com.au
 ```
 
-Then put your VPS reverse proxy in front of that port and point Trello at:
+Then point Trello at:
 
-- `https://trello-nesting.yourdomain.com/index.html`
+- `https://trello.clearops.com.au/index.html`
 
 Make sure the same origin is also added to your Trello API key allowed origins:
 
-- `https://trello-nesting.yourdomain.com`
+- `https://trello.clearops.com.au`
+
+Important:
+
+- `SITE_HOST` must already resolve publicly to your VPS IP.
+- Ports `80` and `443` must be open to the internet for automatic HTTPS to work.
+- Inference: if another container or reverse proxy is already using host ports `80` or `443`, Caddy will not be able to start until those ports are freed or that existing proxy is used instead.
 
 ## Local run
 
