@@ -1,0 +1,18 @@
+services:
+  clearops-card-nesting:
+    container_name: clearops-card-nesting
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8081}:80"
+    environment:
+      POWERUP_APP_NAME: "${POWERUP_APP_NAME:-ClearOps Card Nesting}"
+      POWERUP_API_KEY: "${POWERUP_API_KEY}"
+      POWERUP_APP_URL: "${POWERUP_APP_URL}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

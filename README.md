@@ -57,6 +57,44 @@ window.POWERUP_CONFIG = {
 };
 ```
 
+## VPS deploy with Docker Compose
+
+For VPS deploys, the container now generates `public/config.js` from environment variables at startup, so you do not need to commit a live config file.
+
+1. Clone the repo on the VPS.
+2. Copy `.env.example` to `.env`.
+3. Set these values in `.env`:
+
+- `HOST_PORT`
+- `POWERUP_APP_NAME`
+- `POWERUP_API_KEY`
+- `POWERUP_APP_URL`
+
+4. Start the container:
+
+```bash
+docker compose up -d --build
+```
+
+The app will be available on `http://your-server:HOST_PORT` before you put HTTPS in front of it.
+
+Example `.env`:
+
+```env
+HOST_PORT=8081
+POWERUP_APP_NAME=ClearOps Card Nesting
+POWERUP_API_KEY=YOUR_TRELLO_API_KEY
+POWERUP_APP_URL=https://trello-nesting.yourdomain.com
+```
+
+Then put your VPS reverse proxy in front of that port and point Trello at:
+
+- `https://trello-nesting.yourdomain.com/index.html`
+
+Make sure the same origin is also added to your Trello API key allowed origins:
+
+- `https://trello-nesting.yourdomain.com`
+
 ## Local run
 
 You can serve the `public/` folder with any static server.
