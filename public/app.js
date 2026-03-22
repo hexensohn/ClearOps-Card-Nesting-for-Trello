@@ -243,13 +243,35 @@
     return normalizeLabels((card && card.labels) || (card && card.idLabels) || []);
   }
 
-  function normalizeParentEntry(parentCardId, entry) {
-    return {
-      parentCardId,
-      label: (entry && entry.label) || "",
-      childItems: Array.isArray(entry && entry.childItems) ? entry.childItems : []
-    };
-  }
+function normalizeParentEntry(parentCardId, entry) {
+  return {
+    parentCardId,
+    label: (entry && entry.label) || "",
+    childItems: Array.isArray(entry && entry.childItems)
+      ? entry.childItems.map(normalizeStoredChildItem)
+      : []
+  };
+}
+
+function normalizeStoredChildItem(childItem) {
+  return {
+    id: (childItem && childItem.id) || makeId(),
+    title: (childItem && childItem.title) || "",
+    description: (childItem && childItem.description) || "",
+    createdAt: (childItem && childItem.createdAt) || "",
+    sourceCardId: (childItem && childItem.sourceCardId) || ""
+  };
+}
+
+function buildStoredChildItem(childInput) {
+  return normalizeStoredChildItem({
+    id: makeId(),
+    title: (childInput.title || "").trim(),
+    description: (childInput.description || "").trim(),
+    createdAt: new Date().toISOString(),
+    sourceCardId: childInput.sourceCardId || ""
+  });
+}
 
   function getParentEntry(store, parentCardId) {
     return normalizeParentEntry(parentCardId, store.parentsById[parentCardId]);
@@ -265,20 +287,20 @@
     return Boolean(store.parentsById[cardId]);
   }
 
-  function findEmbeddedSource(store, cardId) {
-    for (const [parentCardId, rawEntry] of Object.entries(store.parentsById || {})) {
-      const entry = normalizeParentEntry(parentCardId, rawEntry);
-      const childItem = entry.childItems.find((item) => item.sourceCardId === cardId);
-      if (childItem) {
-        return {
-          parentCardId,
-          childItem
-        };
-      }
+function findEmbeddedSource(store, cardId) {
+  for (const [parentCardId, rawEntry] of Object.entries(store.parentsById || {})) {
+    const entry = normalizeParentEntry(parentCardId, rawEntry);
+    const childItem = entry.childItems.find((item) => item.sourceCardId === cardId);
+    if (childItem) {
+      return {
+        parentCardId,
+        childItem
+      };
     }
-
-    return null;
   }
+
+  return null;
+}
 
   async function getBoardCard(id) {
     return api(`/cards/${id}`, {
@@ -463,81 +485,64 @@
     broadcastRefreshSignal("set-parent");
   }
 
-  async function addChildItemToParent(parentCardId, childInput) {
-    const title = (childInput.title || "").trim();
+async function addChildItemToParent(parentCardId, childInput) {
+  const title = (childInput.title || "").trim();
 
-    if (!title) {
-      throw new Error("Nested card title is required.");
-    }
-
-    await updateStore((store) => {
-      if (!store.parentsById[parentCardId]) {
-        throw new Error("Choose a card that has already been set as a parent.");
-      }
-
-      const parentEntry = ensureParentEntry(store, parentCardId);
-      parentEntry.childItems.unshift({
-        id: makeId(),
-        title,
-        description: (childInput.description || "").trim(),
-        createdAt: new Date().toISOString(),
-        sourceCardId: childInput.sourceCardId || "",
-        sourceCardName: childInput.sourceCardName || "",
-        sourceCardShortLink: childInput.sourceCardShortLink || "",
-        sourceCardUrl: childInput.sourceCardUrl || "",
-        sourceCardLabels: normalizeLabels(childInput.sourceCardLabels)
-      });
-    });
-
-    broadcastRefreshSignal("add-child");
+  if (!title) {
+    throw new Error("Nested card title is required.");
   }
 
-  async function storeCurrentCardInParent(parentCardId) {
-    const ctx = await getCurrentContext();
-    const sourceCard = await getBoardCard(ctx.card.id);
-    const resolvedSourceLabels = await resolveCardLabels(sourceCard, ctx.board.id);
-    const parentCard = await getBoardCard(parentCardId).catch(function () {
-      return null;
-    });
-
-    if (ctx.card.id === parentCardId) {
-      throw new Error("A parent card cannot nest itself.");
+  await updateStore((store) => {
+    if (!store.parentsById[parentCardId]) {
+      throw new Error("Choose a card that has already been set as a parent.");
     }
 
-    if (isParentCard(ctx.store, ctx.card.id)) {
-      throw new Error("This card is already acting as a parent container.");
-    }
+    const parentEntry = ensureParentEntry(store, parentCardId);
+    parentEntry.childItems.unshift(buildStoredChildItem(childInput));
+  });
 
-    const existingEmbedding = findEmbeddedSource(ctx.store, ctx.card.id);
-    if (existingEmbedding) {
-      throw new Error("This card has already been stored inside a parent.");
-    }
+  broadcastRefreshSignal("add-child");
+}
 
-    await addChildItemToParent(parentCardId, {
-      title: sourceCard.name || ctx.card.name,
-      description: sourceCard.desc || ctx.card.desc || "",
-      sourceCardId: sourceCard.id || ctx.card.id,
-      sourceCardName: sourceCard.name || ctx.card.name,
-      sourceCardShortLink: sourceCard.shortLink || ctx.card.shortLink || "",
-      sourceCardUrl: sourceCard.url || ctx.card.url || "",
-      sourceCardLabels: normalizeLabels(ctx.card.labels).length
-        ? normalizeLabels(ctx.card.labels)
-        : resolvedSourceLabels
-    });
+async function storeCurrentCardInParent(parentCardId) {
+  const ctx = await getCurrentContext();
+  const sourceCard = await getBoardCard(ctx.card.id);
+  const parentCard = await getBoardCard(parentCardId).catch(function () {
+    return null;
+  });
 
-    const nestedComment = buildNestedComment(parentCard);
-    if (nestedComment) {
-      try {
-        await addCommentToCard(ctx.card.id, nestedComment);
-      } catch (error) {
-        console.warn("Unable to add nested-card comment to card.", error);
-      }
-    }
-
-    await closeCard(ctx.card.id, true);
-
-    return parentCard;
+  if (ctx.card.id === parentCardId) {
+    throw new Error("A parent card cannot nest itself.");
   }
+
+  if (isParentCard(ctx.store, ctx.card.id)) {
+    throw new Error("This card is already acting as a parent container.");
+  }
+
+  const existingEmbedding = findEmbeddedSource(ctx.store, ctx.card.id);
+  if (existingEmbedding) {
+    throw new Error("This card has already been stored inside a parent.");
+  }
+
+  await addChildItemToParent(parentCardId, {
+    title: sourceCard.name || ctx.card.name,
+    description: sourceCard.desc || ctx.card.desc || "",
+    sourceCardId: sourceCard.id || ctx.card.id
+  });
+
+  const nestedComment = buildNestedComment(parentCard);
+  if (nestedComment) {
+    try {
+      await addCommentToCard(ctx.card.id, nestedComment);
+    } catch (error) {
+      console.warn("Unable to add nested-card comment to card.", error);
+    }
+  }
+
+  await closeCard(ctx.card.id, true);
+
+  return parentCard;
+}
 
   async function getEligibleListCardsForCurrentParent(listId) {
     const ctx = await getCurrentContext();
@@ -557,77 +562,65 @@
     });
   }
 
-  async function bulkStoreCardsInCurrentParent(cardIds, options = {}) {
-    const ctx = await getCurrentContext();
-    const selectedIds = new Set(cardIds || []);
+async function bulkStoreCardsInCurrentParent(cardIds, options = {}) {
+  const ctx = await getCurrentContext();
+  const selectedIds = new Set(cardIds || []);
 
-    if (!selectedIds.size) {
-      throw new Error("Select at least one card.");
+  if (!selectedIds.size) {
+    throw new Error("Select at least one card.");
+  }
+
+  const boardCards = await getBoardCards(ctx.board.id);
+  const selectedCards = boardCards.filter((boardCard) => selectedIds.has(boardCard.id));
+
+  if (!selectedCards.length) {
+    throw new Error("No eligible cards were selected.");
+  }
+
+  await updateStore((store) => {
+    if (!store.parentsById[ctx.card.id]) {
+      throw new Error("This card is not set as a parent.");
     }
 
-    const boardCards = await getBoardCards(ctx.board.id);
-    const selectedCards = boardCards.filter((boardCard) => selectedIds.has(boardCard.id));
-    const selectedCardsWithLabels = await Promise.all(
-      selectedCards.map(async function (selectedCard) {
-        return {
-          ...selectedCard,
-          resolvedLabels: await resolveCardLabels(selectedCard, ctx.board.id)
-        };
-      })
+    const parentEntry = ensureParentEntry(store, ctx.card.id);
+    const nestedSourceIds = new Set(
+      (parentEntry.childItems || []).map((item) => item.sourceCardId).filter(Boolean)
     );
 
-    if (!selectedCardsWithLabels.length) {
-      throw new Error("No eligible cards were selected.");
-    }
+    for (const selectedCard of selectedCards) {
+      if (selectedCard.id === ctx.card.id) continue;
+      if (isParentCard(store, selectedCard.id)) continue;
+      if (nestedSourceIds.has(selectedCard.id)) continue;
+      if (findEmbeddedSource(store, selectedCard.id)) continue;
 
-    await updateStore((store) => {
-      if (!store.parentsById[ctx.card.id]) {
-        throw new Error("This card is not set as a parent.");
-      }
-
-      const parentEntry = ensureParentEntry(store, ctx.card.id);
-      const nestedSourceIds = new Set(
-        (parentEntry.childItems || []).map((item) => item.sourceCardId).filter(Boolean)
-      );
-
-      for (const selectedCard of selectedCardsWithLabels) {
-        if (selectedCard.id === ctx.card.id) continue;
-        if (isParentCard(store, selectedCard.id)) continue;
-        if (nestedSourceIds.has(selectedCard.id)) continue;
-        if (findEmbeddedSource(store, selectedCard.id)) continue;
-
-        parentEntry.childItems.unshift({
-          id: makeId(),
+      parentEntry.childItems.unshift(
+        buildStoredChildItem({
           title: selectedCard.name,
           description: selectedCard.desc || "",
-          createdAt: new Date().toISOString(),
-          sourceCardId: selectedCard.id,
-          sourceCardName: selectedCard.name,
-          sourceCardShortLink: selectedCard.shortLink || "",
-          sourceCardUrl: selectedCard.url || "",
-          sourceCardLabels: selectedCard.resolvedLabels
-        });
-      }
-    });
+          sourceCardId: selectedCard.id
+        })
+      );
+    }
+  });
 
-    const nestedComment = buildNestedComment(ctx.card);
-    await Promise.all(
-      selectedCardsWithLabels.map(async function (selectedCard) {
-        if (nestedComment) {
-          try {
-            await addCommentToCard(selectedCard.id, nestedComment);
-          } catch (error) {
-            console.warn("Unable to add nested-card comment to card.", error);
-          }
+  const nestedComment = buildNestedComment(ctx.card);
+  await Promise.all(
+    selectedCards.map(async function (selectedCard) {
+      if (nestedComment) {
+        try {
+          await addCommentToCard(selectedCard.id, nestedComment);
+        } catch (error) {
+          console.warn("Unable to add nested-card comment to card.", error);
         }
+      }
 
-        await closeCard(selectedCard.id, true);
-      })
-    );
+      await closeCard(selectedCard.id, true);
+    })
+  );
 
-    broadcastRefreshSignal("bulk-add");
-    return selectedCardsWithLabels;
-  }
+  broadcastRefreshSignal("bulk-add");
+  return selectedCards;
+}
 
   function buildRestoreComment(childItem, parentCard) {
     const metadata = [];
@@ -641,41 +634,41 @@
     return metadata.join("\n");
   }
 
-  async function restoreChildItemToBoard(childItem, parentCardId) {
-    const parentCard = await getBoardCard(parentCardId);
-    let restoredCard = null;
+ async function restoreChildItemToBoard(childItem, parentCardId) {
+  const parentCard = await getBoardCard(parentCardId);
+  let restoredCard = null;
 
-    if (childItem.sourceCardId) {
-      try {
-        restoredCard = await updateCard(childItem.sourceCardId, {
-          idList: parentCard.idList,
-          closed: "false",
-          pos: "top"
-        });
-      } catch (error) {
-        // Fall back to creating a new card if the original source card cannot be restored.
-      }
-    }
-
-    if (!restoredCard) {
-      restoredCard = await createCard({
-        listId: parentCard.idList,
-        name: childItem.title,
-        desc: (childItem.description || "").trim()
+  if (childItem.sourceCardId) {
+    try {
+      restoredCard = await updateCard(childItem.sourceCardId, {
+        idList: parentCard.idList,
+        closed: "false",
+        pos: "top"
       });
+    } catch (error) {
+      // Fall back to creating a new card if the original source card cannot be restored.
     }
-
-    const restoreComment = buildRestoreComment(childItem, parentCard);
-    if (restoreComment) {
-      try {
-        await addCommentToCard(restoredCard.id, restoreComment);
-      } catch (error) {
-        console.warn("Unable to add restore comment to card.", error);
-      }
-    }
-
-    return restoredCard;
   }
+
+  if (!restoredCard) {
+    restoredCard = await createCard({
+      listId: parentCard.idList,
+      name: childItem.title,
+      desc: (childItem.description || "").trim()
+    });
+  }
+
+  const restoreComment = buildRestoreComment(childItem, parentCard);
+  if (restoreComment) {
+    try {
+      await addCommentToCard(restoredCard.id, restoreComment);
+    } catch (error) {
+      console.warn("Unable to add restore comment to card.", error);
+    }
+  }
+
+  return restoredCard;
+}
 
   async function extractChildToCard(parentCardId, childItemId) {
     const store = await getStore();
@@ -822,34 +815,37 @@
     return preview;
   }
 
-  async function hydrateChildItems(childItems, boardId) {
-    return Promise.all(
-      (childItems || []).map(async function (childItem) {
-        if (!childItem.sourceCardId) {
-          return {
-            ...childItem,
-            sourceCardLabels: normalizeLabels(childItem.sourceCardLabels)
-          };
-        }
+async function hydrateChildItems(childItems, boardId) {
+  return Promise.all(
+    (childItems || []).map(async function (childItem) {
+      const normalizedChild = normalizeStoredChildItem(childItem);
 
-        try {
-          const sourceCard = await getBoardCard(childItem.sourceCardId);
-          const resolvedLabels = await resolveCardLabels(sourceCard, boardId);
-          return {
-            ...childItem,
-            sourceCardLabels: resolvedLabels.length
-              ? resolvedLabels
-              : normalizeLabels(childItem.sourceCardLabels)
-          };
-        } catch (error) {
-          return {
-            ...childItem,
-            sourceCardLabels: normalizeLabels(childItem.sourceCardLabels)
-          };
-        }
-      })
-    );
-  }
+      if (!normalizedChild.sourceCardId) {
+        return {
+          ...normalizedChild,
+          sourceCardLabels: []
+        };
+      }
+
+      try {
+        const sourceCard = await getBoardCard(normalizedChild.sourceCardId);
+        const resolvedLabels = await resolveCardLabels(sourceCard, boardId);
+
+        return {
+          ...normalizedChild,
+          title: sourceCard.name || normalizedChild.title,
+          description: sourceCard.desc || normalizedChild.description || "",
+          sourceCardLabels: resolvedLabels
+        };
+      } catch (error) {
+        return {
+          ...normalizedChild,
+          sourceCardLabels: []
+        };
+      }
+    })
+  );
+}
 
   function createLabelChip(label) {
     const chip = document.createElement("span");
