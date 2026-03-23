@@ -95,6 +95,19 @@
     window.localStorage.removeItem("trello_token");
   }
 
+  function isBoardAccessDeniedMessage(text) {
+    const normalized = String(text || "").toLowerCase();
+    return normalized.includes("trello token does not have access to this board");
+  }
+
+  function isRecoverableAuthError(error) {
+    return isBoardAccessDeniedMessage(error && error.message);
+  }
+
+  function getRecoverableAuthMessage() {
+    return "Your saved Trello authorization cannot access this board anymore. Click Authorize Trello API and try again.";
+  }
+
   function broadcastRefreshSignal(reason) {
     try {
       window.localStorage.setItem(
@@ -280,6 +293,10 @@
 
     if (!response.ok) {
       const text = await response.text();
+      if (response.status === 403 && isBoardAccessDeniedMessage(text)) {
+        clearStoredToken();
+        throw new Error(getRecoverableAuthMessage());
+      }
       throw new Error(`Backend error ${response.status}: ${text}`);
     }
 
@@ -1336,12 +1353,20 @@ async function hydrateChildItems(childItems, boardId) {
       }
     });
 
-    const ctx = await getCurrentContext();
-    const currentEntry = ctx.store.parentsById[ctx.card.id];
-    if (currentEntry && currentEntry.label) {
-      labelInput.value = currentEntry.label;
-    } else {
-      labelInput.value = ctx.card.name || "";
+    try {
+      const ctx = await getCurrentContext();
+      const currentEntry = ctx.store.parentsById[ctx.card.id];
+      if (currentEntry && currentEntry.label) {
+        labelInput.value = currentEntry.label;
+      } else {
+        labelInput.value = ctx.card.name || "";
+      }
+    } catch (error) {
+      if (isRecoverableAuthError(error)) {
+        refreshAuthUi();
+      }
+      renderMessage(msg, "error", error.message || "Unable to load this card.");
+      return;
     }
 
     form?.addEventListener("submit", async function (event) {
@@ -1513,7 +1538,14 @@ async function hydrateChildItems(childItems, boardId) {
     });
 
     if (isAuthorized()) {
-      await loadParents();
+      try {
+        await loadParents();
+      } catch (error) {
+        if (isRecoverableAuthError(error)) {
+          refreshAuthUi();
+        }
+        renderMessage(msg, "error", error.message || "Unable to load parent cards.");
+      }
     }
 
     form?.addEventListener("submit", async function (event) {
@@ -1655,7 +1687,14 @@ async function hydrateChildItems(childItems, boardId) {
     });
 
     if (isAuthorized()) {
-      await loadListsAndCards();
+      try {
+        await loadListsAndCards();
+      } catch (error) {
+        if (isRecoverableAuthError(error)) {
+          refreshAuthUi();
+        }
+        renderMessage(msg, "error", error.message || "Unable to load cards for this parent.");
+      }
     }
 
     form?.addEventListener("submit", async function (event) {
@@ -2016,9 +2055,41 @@ async function hydrateChildItems(childItems, boardId) {
     }
 
     if (page === "group-panel") {
+      const authStatus = document.getElementById("auth-status");
+      const authButton = document.getElementById("authorize-btn");
+      const authRow = document.getElementById("auth-row");
+
+      function refreshAuthUi() {
+        const authorized = isAuthorized();
+        setElementHidden(authStatus, authorized);
+        setElementHidden(authRow, authorized);
+
+        if (authStatus) {
+          authStatus.textContent = "Authorize Trello to continue.";
+        }
+      }
+
+      refreshAuthUi();
+
+      authButton?.addEventListener("click", async function () {
+        const msg = document.getElementById("message");
+
+        try {
+          await authorizeWithTrello();
+          refreshAuthUi();
+          await renderGroupPanel();
+          renderMessage(msg, "success", "Authorized.");
+        } catch (error) {
+          renderMessage(msg, "error", error.message || "Authorization failed.");
+        }
+      });
+
       const rerenderGroupPanel = function () {
         renderGroupPanel().catch(function (error) {
           console.error(error);
+          if (isRecoverableAuthError(error)) {
+            refreshAuthUi();
+          }
           const msg = document.getElementById("message");
           if (msg) {
             renderMessage(msg, "error", error.message || "Unable to refresh the card view.");
