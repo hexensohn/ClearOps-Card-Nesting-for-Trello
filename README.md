@@ -59,15 +59,13 @@ window.POWERUP_CONFIG = {
 
 ## VPS deploy with Docker Compose
 
-For VPS deploys, the app container now serves both the static Power-Up files and the backend API, and persists nested-card state in SQLite.
+For VPS deploys, the app container serves both the static Power-Up files and the backend API, and persists nested-card state in SQLite.
 
 1. Clone the repo on the VPS.
 2. Copy `.env.example` to `.env`.
 3. Set these values in `.env`:
 
-- `SITE_HOST`
-- `HTTP_PORT`
-- `HTTPS_PORT`
+- `APP_PORT`
 - `POWERUP_APP_NAME`
 - `POWERUP_API_KEY`
 - `POWERUP_APP_URL`
@@ -79,14 +77,12 @@ For VPS deploys, the app container now serves both the static Power-Up files and
 docker compose up -d --build
 ```
 
-This stack now includes Caddy, which will request and renew HTTPS certificates automatically for your domain.
+This deployment keeps the project to a single container so it can run behind an existing reverse proxy or managed platform ingress without fighting for ports `80/443`.
 
 Example `.env`:
 
 ```env
-SITE_HOST=trello.clearops.com.au
-HTTP_PORT=80
-HTTPS_PORT=443
+APP_PORT=8080
 POWERUP_APP_NAME=ClearOps Card Nesting
 POWERUP_API_KEY=YOUR_TRELLO_API_KEY
 POWERUP_APP_URL=https://trello.clearops.com.au
@@ -103,10 +99,9 @@ Make sure the same origin is also added to your Trello API key allowed origins:
 
 Important:
 
-- `SITE_HOST` must already resolve publicly to your VPS IP.
-- Ports `80` and `443` must be open to the internet for automatic HTTPS to work.
+- `APP_PORT` must be free on the host, or overridden to a free port if `8080` is already in use.
 - Docker Compose mounts a named volume at `/data` so the SQLite database survives container rebuilds.
-- Inference: if another container or reverse proxy is already using host ports `80` or `443`, Caddy will not be able to start until those ports are freed or that existing proxy is used instead.
+- Use your existing reverse proxy, platform domain mapping, or Hostinger access settings to route the public URL to this container.
 
 ## Local run
 
