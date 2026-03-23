@@ -33,7 +33,7 @@ services:
     environment:
       SITE_HOST: "${SITE_HOST}"
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy:/etc/caddy:ro
       - caddy_data:/data
       - caddy_config:/config
 
