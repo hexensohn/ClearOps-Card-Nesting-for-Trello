@@ -5,12 +5,16 @@
   let resizeQueued = false;
   let resizeObserver = null;
   const boardLabelCache = new Map();
+  const nestedSearchFieldIdCache = new Map();
+  const nestedSearchSyncCache = new Map();
 
   const LEGACY_STORAGE_KEY = "cardNesting";
   const BOARD_INDEX_KEY = "cardNestingIndex";
   const PARENT_STORAGE_KEY = "cardNestingParent";
   const REFRESH_SIGNAL_KEY = "cardNestingRefreshSignal";
   const storageReadyBoards = new Set();
+  const NESTED_SEARCH_FIELD_NAME = "Nested Card Search";
+  const NESTED_SEARCH_TEXT_LIMIT = 8000;
 
   function ensureConfig() {
     if (!CONFIG.apiKey || CONFIG.apiKey === "REPLACE_WITH_TRELLO_API_KEY") {
@@ -330,7 +334,9 @@
     await ensureStorageReady(targetT);
 
     const backendStore = await getBackendStoreForBoard(board.id);
-    return backendStore.found ? backendStore.store : normalizeStore(null);
+    const store = backendStore.found ? backendStore.store : normalizeStore(null);
+    scheduleBoardSearchSync(board.id, store);
+    return store;
   }
 
   async function setStore(nextStore, targetT = getIframeContext()) {
@@ -352,10 +358,13 @@
 
   async function setParentEntryById(parentCardId, entry, targetT = getIframeContext()) {
     const normalizedEntry = compactParentEntryForStorage(parentCardId, entry);
+    const board = await targetT.board("id");
 
     await updateStore((store) => {
       store.parentsById[parentCardId] = normalizedEntry;
     }, targetT);
+
+    await syncParentSearchIndex(parentCardId, normalizedEntry, board.id);
 
     return normalizedEntry;
   }
@@ -542,6 +551,197 @@
     const normalizedLabels = normalizeLabels(labels);
     boardLabelCache.set(boardId, normalizedLabels);
     return normalizedLabels;
+  }
+
+  async function getBoardCustomFields(boardId) {
+    if (!boardId) {
+      return [];
+    }
+
+    return api(`/boards/${boardId}/customFields`);
+  }
+
+  async function createBoardTextCustomField(boardId, name) {
+    return api("/customFields", {
+      method: "POST",
+      body: {
+        idModel: boardId,
+        modelType: "board",
+        name,
+        type: "text",
+        pos: "bottom",
+        display_cardFront: false
+      }
+    });
+  }
+
+  function getCustomFieldName(customField) {
+    return (
+      (customField && customField.name) ||
+      (customField && customField.display && customField.display.name) ||
+      ""
+    ).trim();
+  }
+
+  function isCustomFieldUnavailableError(error) {
+    const message = String((error && error.message) || "").toLowerCase();
+    return (
+      message.includes("403") ||
+      message.includes("404") ||
+      message.includes("custom field") ||
+      message.includes("customfield")
+    );
+  }
+
+  async function getNestedSearchFieldId(boardId) {
+    if (!boardId) {
+      return null;
+    }
+
+    if (!nestedSearchFieldIdCache.has(boardId)) {
+      nestedSearchFieldIdCache.set(
+        boardId,
+        (async function () {
+          try {
+            const customFields = await getBoardCustomFields(boardId);
+            const existingField = (customFields || []).find(function (customField) {
+              return (
+                getCustomFieldName(customField).toLowerCase() === NESTED_SEARCH_FIELD_NAME.toLowerCase() &&
+                String((customField && customField.type) || "").toLowerCase() === "text"
+              );
+            });
+
+            if (existingField && existingField.id) {
+              return existingField.id;
+            }
+
+            const createdField = await createBoardTextCustomField(boardId, NESTED_SEARCH_FIELD_NAME);
+            return createdField && createdField.id ? createdField.id : null;
+          } catch (error) {
+            if (isCustomFieldUnavailableError(error)) {
+              console.warn(
+                "Nested-card board filtering requires Trello Custom Fields to be enabled on this board."
+              );
+            } else {
+              console.warn("Unable to prepare the nested-card search field.", error);
+            }
+
+            return null;
+          }
+        })()
+      );
+    }
+
+    return nestedSearchFieldIdCache.get(boardId);
+  }
+
+  function buildNestedSearchText(parentEntry) {
+    const normalizedEntry = normalizeParentEntry(
+      (parentEntry && parentEntry.parentCardId) || "",
+      parentEntry
+    );
+    const seen = new Set();
+    const parts = [];
+    let totalLength = 0;
+
+    for (const childItem of normalizedEntry.childItems || []) {
+      const text = String((childItem && childItem.title) || "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!text) {
+        continue;
+      }
+
+      const dedupeKey = text.toLowerCase();
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+
+      const nextLength = totalLength + text.length + (parts.length ? 1 : 0);
+      if (nextLength > NESTED_SEARCH_TEXT_LIMIT) {
+        break;
+      }
+
+      seen.add(dedupeKey);
+      parts.push(text);
+      totalLength = nextLength;
+    }
+
+    return parts.join("\n");
+  }
+
+  async function updateCardTextCustomField(cardId, customFieldId, text) {
+    if (!cardId || !customFieldId) {
+      return null;
+    }
+
+    return api(`/cards/${cardId}/customField/${customFieldId}/item`, {
+      method: "PUT",
+      body: text
+        ? {
+            value: {
+              text
+            }
+          }
+        : {
+            idValue: "",
+            value: ""
+          }
+    });
+  }
+
+  async function syncParentSearchIndex(parentCardId, parentEntry, boardId, customFieldId) {
+    const normalizedEntry = normalizeParentEntry(parentCardId, parentEntry);
+    if (!normalizedEntry.isParent) {
+      return;
+    }
+
+    const resolvedFieldId = customFieldId || (await getNestedSearchFieldId(boardId));
+    if (!resolvedFieldId) {
+      return;
+    }
+
+    try {
+      await updateCardTextCustomField(
+        parentCardId,
+        resolvedFieldId,
+        buildNestedSearchText(normalizedEntry)
+      );
+    } catch (error) {
+      console.warn("Unable to update the nested-card search index.", error);
+    }
+  }
+
+  function scheduleBoardSearchSync(boardId, store) {
+    if (!boardId || nestedSearchSyncCache.has(boardId)) {
+      return;
+    }
+
+    nestedSearchSyncCache.set(
+      boardId,
+      (async function () {
+        const parentsById = ((store && store.parentsById) || {});
+        const parentEntries = Object.entries(parentsById).filter(function ([, entry]) {
+          return Boolean(entry && entry.isParent);
+        });
+
+        if (!parentEntries.length) {
+          return;
+        }
+
+        const customFieldId = await getNestedSearchFieldId(boardId);
+        if (!customFieldId) {
+          return;
+        }
+
+        for (const [parentCardId, parentEntry] of parentEntries) {
+          await syncParentSearchIndex(parentCardId, parentEntry, boardId, customFieldId);
+        }
+      })().catch(function (error) {
+        console.warn("Unable to backfill the nested-card search index.", error);
+      })
+    );
   }
 
   function getCardLabelIds(card) {
