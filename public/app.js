@@ -6,7 +6,6 @@
   let resizeObserver = null;
   const boardLabelCache = new Map();
   const nestedSearchFieldIdCache = new Map();
-  const nestedSearchSyncCache = new Map();
 
   const LEGACY_STORAGE_KEY = "cardNesting";
   const BOARD_INDEX_KEY = "cardNestingIndex";
@@ -351,9 +350,7 @@
     await ensureStorageReady(targetT);
 
     const backendStore = await getBackendStoreForBoard(board.id);
-    const store = backendStore.found ? backendStore.store : normalizeStore(null);
-    scheduleBoardSearchSync(board.id, store);
-    return store;
+    return backendStore.found ? backendStore.store : normalizeStore(null);
   }
 
   async function setStore(nextStore, targetT = getIframeContext()) {
@@ -688,6 +685,29 @@
     return parts.join("\n");
   }
 
+  function normalizeCustomFieldTextValue(value) {
+    return String(value || "")
+      .replace(/\r\n/g, "\n")
+      .trim();
+  }
+
+  async function getCardCustomFieldTextValue(cardId, customFieldId) {
+    if (!cardId || !customFieldId) {
+      return "";
+    }
+
+    const customFieldItems = await api(`/cards/${cardId}/customFieldItems`);
+    const matchingItem = Array.isArray(customFieldItems)
+      ? customFieldItems.find(function (item) {
+          return item && item.idCustomField === customFieldId;
+        })
+      : null;
+
+    return normalizeCustomFieldTextValue(
+      matchingItem && matchingItem.value ? matchingItem.value.text : ""
+    );
+  }
+
   async function updateCardTextCustomField(cardId, customFieldId, text) {
     if (!cardId || !customFieldId) {
       return null;
@@ -719,46 +739,18 @@
       return;
     }
 
+    const nextText = normalizeCustomFieldTextValue(buildNestedSearchText(normalizedEntry));
+
     try {
-      await updateCardTextCustomField(
-        parentCardId,
-        resolvedFieldId,
-        buildNestedSearchText(normalizedEntry)
-      );
+      const currentText = await getCardCustomFieldTextValue(parentCardId, resolvedFieldId);
+      if (currentText === nextText) {
+        return;
+      }
+
+      await updateCardTextCustomField(parentCardId, resolvedFieldId, nextText);
     } catch (error) {
       console.warn("Unable to update the nested-card search index.", error);
     }
-  }
-
-  function scheduleBoardSearchSync(boardId, store) {
-    if (!boardId || nestedSearchSyncCache.has(boardId)) {
-      return;
-    }
-
-    nestedSearchSyncCache.set(
-      boardId,
-      (async function () {
-        const parentsById = ((store && store.parentsById) || {});
-        const parentEntries = Object.entries(parentsById).filter(function ([, entry]) {
-          return Boolean(entry && entry.isParent);
-        });
-
-        if (!parentEntries.length) {
-          return;
-        }
-
-        const customFieldId = await getNestedSearchFieldId(boardId);
-        if (!customFieldId) {
-          return;
-        }
-
-        for (const [parentCardId, parentEntry] of parentEntries) {
-          await syncParentSearchIndex(parentCardId, parentEntry, boardId, customFieldId);
-        }
-      })().catch(function (error) {
-        console.warn("Unable to backfill the nested-card search index.", error);
-      })
-    );
   }
 
   function getCardLabelIds(card) {
